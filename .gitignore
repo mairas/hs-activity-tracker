@@ -1,3 +1,4 @@
 config.local.lua
 *.log
 .DS_Store
+.luarocks/
