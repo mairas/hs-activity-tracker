@@ -56,7 +56,9 @@ All timestamps are **UTC**, ISO 8601 with `Z` suffix, millisecond precision. Raw
 
 ### Title debounce
 
-Animated titles (CLI spinner glyphs, browser progress counters, save indicators) make `hs.window.filter`'s `windowTitleChanged` callback fire many times per second. To keep the event log readable, `window_title` is debounced per `window_id`: after a `window_title` (or `window_focus`) is emitted for a given window, further `windowTitleChanged` callbacks within `window_title_debounce_seconds` (default 2 s) are dropped. The **first** frame of each burst is kept — that's the moment the meaningful transition was observed; subsequent frames are animation noise that carries no extra signal and would arrive later. Setting `window_title_debounce_seconds = 0` disables suppression for users who want the raw stream.
+Animated titles (CLI spinner glyphs, browser progress counters, save indicators) make `hs.window.filter`'s `windowTitleChanged` callback fire many times per second. To keep the event log readable, `window_title` is debounced per `window_id`: a change is emitted only if **no other observation** (emitted or suppressed) landed within `window_title_debounce_seconds` (default 2 s). Each observation extends the suppression, so a sustained sub-debounce stream stays silent indefinitely after its first frame; an isolated change followed by silence emits immediately. `window_focus` events seed the same observation timestamp so the post-focus animation burst is suppressed correctly. Setting `window_title_debounce_seconds = 0` disables suppression for users who want the raw stream.
+
+Tradeoff: when a noisy stream eventually settles, the final stable title is part of the burst and is therefore suppressed — its value is lost until the next genuine change. That's the cost of leading-edge debounce; capturing the settled title would require a trailing-edge timer-flush variant that we judged not worth the added complexity.
 
 ## Idle handling
 

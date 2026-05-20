@@ -8,18 +8,38 @@ describe('title_debounce.should_emit', function()
     assert.are.equal(1000, new_state[42])
   end)
 
-  it('suppresses changes inside the debounce window', function()
+  it('suppresses changes inside the debounce window and records the observation', function()
     local state = { [42] = 1000 }
     local new_state, emit = title_debounce.should_emit(state, 42, 1001, 2)
     assert.is_false(emit)
-    assert.are.equal(1000, new_state[42])
+    -- Observation timestamp advances even on suppression — that's what keeps
+    -- a sustained burst suppressed past the original debounce window.
+    assert.are.equal(1001, new_state[42])
   end)
 
-  it('emits again once the debounce window has elapsed', function()
+  it('emits again once the debounce window has elapsed since the last observation', function()
     local state = { [42] = 1000 }
     local new_state, emit = title_debounce.should_emit(state, 42, 1002, 2)
     assert.is_true(emit)
     assert.are.equal(1002, new_state[42])
+  end)
+
+  it('keeps a sustained sub-debounce stream suppressed indefinitely', function()
+    -- 1 Hz updates with debounce_seconds=2: only the first emits, all later
+    -- updates land within 2s of the previous one and stay suppressed.
+    local state = title_debounce.initial_state()
+    local first_state, first_emit = title_debounce.should_emit(state, 42, 1000, 2)
+    assert.is_true(first_emit)
+    local cur = first_state
+    for i = 1, 10 do
+      local next_state, emit = title_debounce.should_emit(cur, 42, 1000 + i, 2)
+      assert.is_false(emit, 'tick ' .. i .. ' should be suppressed')
+      cur = next_state
+    end
+    -- After a 2-second gap the next update emits again.
+    local final_state, final_emit = title_debounce.should_emit(cur, 42, 1013, 2)
+    assert.is_true(final_emit)
+    assert.are.equal(1013, final_state[42])
   end)
 
   it('tracks window_ids independently', function()
