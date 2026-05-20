@@ -1,35 +1,89 @@
 #!/usr/bin/env bash
-set -euo pipefail
+#
+# usage: ./run command [argument ...]
+#
+# Commands for hs-activity-tracker development.
+#
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+set -o nounset
+set -o pipefail
+set -o errexit
 
-show_help() {
-    cat << EOF
-Usage: ./run <command>
+# Change the current directory to the project root.
+PROJECT_ROOT=${0%/*}
+if [[ $0 != $PROJECT_ROOT && $PROJECT_ROOT != "" ]]; then
+  cd "$PROJECT_ROOT"
+fi
+readonly PROJECT_ROOT=$(pwd)
 
-Commands:
-  deps    Install Lua 5.4 + luarocks (via Homebrew) and busted (into .luarocks/)
-  test    Run busted tests
-  help    Show this help message
+################################################################################
+# Setup Commands
 
-EOF
+function deps {
+  #@ Install Lua 5.4, luarocks (Homebrew) and busted (into .luarocks/)
+  #@ Category: Setup
+  brew install lua@5.4 luarocks
+  luarocks --lua-version 5.4 --lua-dir "$(brew --prefix lua@5.4)" install --tree=.luarocks busted
 }
 
-case "${1:-help}" in
-    deps)
-        brew install lua@5.4 luarocks
-        luarocks --lua-version 5.4 --lua-dir "$(brew --prefix lua@5.4)" install --tree=.luarocks busted
-        ;;
-    test)
-        .luarocks/bin/busted
-        ;;
-    help|--help|-h)
-        show_help
-        ;;
-    *)
-        echo "Unknown command: $1"
-        show_help
-        exit 1
-        ;;
-esac
+################################################################################
+# Quality Commands
+
+function test {
+  #@ Run busted tests
+  #@ Category: Quality
+  .luarocks/bin/busted
+}
+
+################################################################################
+# Help System
+
+function help {
+  #@ Show this help message
+  #@ Category: Core
+  echo "hs-activity-tracker - Development Commands"
+  echo "==========================================="
+  echo ""
+  echo "Available commands:"
+  echo ""
+
+  # Extract function definitions and their help comments
+  awk '/^function / {
+    fname = $2
+    sub(/[({].*/, "", fname)
+    getline
+    if ($0 ~ /#@/) {
+      desc = $0
+      sub(/.*#@ /, "", desc)
+      sub(/ *$/, "", desc)
+      getline
+      if ($0 ~ /#@ Category:/) {
+        cat = $0
+        sub(/.*Category: /, "", cat)
+        sub(/ *$/, "", cat)
+        if (!seen[cat]++) categories[++cat_count] = cat
+        commands[cat, ++cmd_count[cat]] = fname
+        descriptions[cat, cmd_count[cat]] = desc
+      }
+    }
+  }
+  END {
+    for (i = 1; i <= cat_count; i++) {
+      cat = categories[i]
+      print "\n" cat ":"
+      for (j = 1; j <= cmd_count[cat]; j++) {
+        printf "  %-25s %s\n", commands[cat, j], descriptions[cat, j]
+      }
+    }
+  }' "$0"
+
+  echo ""
+  echo "Usage: ./run <command> [arguments...]"
+  echo ""
+}
+
+################################################################################
+# Commands end.
+
+TIMEFORMAT=$'\nTask completed in %3lR'
+time "${@:-help}"
