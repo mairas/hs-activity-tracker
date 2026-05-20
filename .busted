@@ -1,0 +1,8 @@
+return {
+  default = {
+    lpath = "./ActivityTracker.spoon/?.lua;./ActivityTracker.spoon/?/init.lua",
+    ROOT = { "ActivityTracker.spoon/spec" },
+    pattern = "_spec",
+    verbose = true,
+  },
+}

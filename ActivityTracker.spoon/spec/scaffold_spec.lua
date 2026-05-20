@@ -1,0 +1,5 @@
+describe("scaffold", function()
+  it("runs busted", function()
+    assert.are.equal(2, 1 + 1)
+  end)
+end)

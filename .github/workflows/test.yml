@@ -1,0 +1,18 @@
+# Disabled until the pure-Lua surface area is worth a CI run.
+# Re-enable by adding `pull_request:` and `push:` triggers.
+name: test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  busted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.4"
+      - uses: leafo/gh-actions-luarocks@v4
+      - run: luarocks install busted
+      - run: busted
