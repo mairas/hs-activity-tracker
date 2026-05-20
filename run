@@ -4,8 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-LUA_PREFIX="/opt/homebrew/opt/lua@5.4"
-
 show_help() {
     cat << EOF
 Usage: ./run <command>
@@ -18,32 +16,19 @@ Commands:
 EOF
 }
 
-ensure_brew_pkg() {
-    local pkg="$1"
-    if ! brew list "$pkg" >/dev/null 2>&1; then
-        brew install "$pkg"
-    fi
-}
-
 case "${1:-help}" in
     deps)
-        ensure_brew_pkg lua@5.4
-        ensure_brew_pkg luarocks
-        luarocks --lua-version 5.4 --lua-dir "$LUA_PREFIX" \
-            install --tree=.luarocks busted
+        brew install lua@5.4 luarocks
+        luarocks --lua-version 5.4 --lua-dir "$(brew --prefix lua@5.4)" install --tree=.luarocks busted
         ;;
     test)
-        if [ ! -x .luarocks/bin/busted ]; then
-            echo "busted not found — run './run deps' first" >&2
-            exit 1
-        fi
         .luarocks/bin/busted
         ;;
     help|--help|-h)
         show_help
         ;;
     *)
-        echo "Unknown command: $1" >&2
+        echo "Unknown command: $1"
         show_help
         exit 1
         ;;
