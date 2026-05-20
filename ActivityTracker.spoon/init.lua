@@ -3,6 +3,12 @@
 --- Records macOS desktop and application activity to a JSONL event log.
 --- Capture only; see docs/design.md for the event schema.
 
+-- hs.loadSpoon does not add the Spoon's directory to package.path, so
+-- require('lib.writer') would otherwise resolve only against the global
+-- Lua paths. Prepend our directory before any requires fire.
+local spoon_dir = debug.getinfo(1, 'S').source:sub(2):match('(.*)/[^/]+$')
+package.path = spoon_dir .. '/?.lua;' .. spoon_dir .. '/?/init.lua;' .. package.path
+
 local writer_mod = require('lib.writer')
 local denylist_mod = require('lib.denylist')
 local idle_mod = require('lib.idle')
