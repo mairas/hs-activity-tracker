@@ -12,6 +12,7 @@ package.path = spoon_dir .. '/?.lua;' .. spoon_dir .. '/?/init.lua;' .. package.
 local writer_mod = require('lib.writer')
 local denylist_mod = require('lib.denylist')
 local idle_mod = require('lib.idle')
+local title_debounce_mod = require('lib.title_debounce')
 
 local obj = {}
 obj.__index = obj
@@ -29,6 +30,9 @@ obj.defaults = {
   heartbeat_interval_seconds = 300,
   idle_min_threshold_seconds = 15,
   idle_timestamp_tolerance_seconds = 2,
+  -- Coalesce rapid `window_title` changes (spinner glyphs, progress counters)
+  -- into a single emit per window per debounce window. Set to 0 to disable.
+  window_title_debounce_seconds = 2,
   log_dir = '~/.local/share/hs-activity-tracker/events',
   diagnostic_log = '~/.local/share/hs-activity-tracker/tracker.log',
   title_denylist_bundle_ids = {
@@ -87,6 +91,10 @@ function obj:_validate_config()
   check_positive('heartbeat_interval_seconds')
   check_positive('idle_min_threshold_seconds')
   check_positive('idle_timestamp_tolerance_seconds')
+  if type(self.config.window_title_debounce_seconds) ~= 'number'
+      or self.config.window_title_debounce_seconds < 0 then
+    errs[#errs + 1] = 'window_title_debounce_seconds must be a non-negative number'
+  end
   for _, k in ipairs({ 'log_dir', 'diagnostic_log' }) do
     if type(self.config[k]) ~= 'string' or self.config[k] == '' then
       errs[#errs + 1] = k .. ' must be a non-empty string'
@@ -132,6 +140,10 @@ function obj:_state_replay(ts)
     local win = app:focusedWindow()
     if win then
       self.writer:write(ts, 'window_focus', self:_window_fields(win))
+      local wid = win:id()
+      if wid then
+        self.title_debounce_state = title_debounce_mod.mark(self.title_debounce_state, wid, ts)
+      end
     end
   end
   local idle_time = hs.host.idleTime()
@@ -148,11 +160,24 @@ function obj:_emit_app_focus(app)
 end
 
 function obj:_emit_window_focus(win)
-  self.writer:write(now(), 'window_focus', self:_window_fields(win))
+  local ts = now()
+  self.writer:write(ts, 'window_focus', self:_window_fields(win))
+  local wid = win:id()
+  if wid then
+    self.title_debounce_state = title_debounce_mod.mark(self.title_debounce_state, wid, ts)
+  end
 end
 
 function obj:_emit_window_title(win)
-  self.writer:write(now(), 'window_title', self:_window_fields(win))
+  local ts = now()
+  local wid = win:id()
+  if wid then
+    local new_state, emit = title_debounce_mod.should_emit(
+      self.title_debounce_state, wid, ts, self.config.window_title_debounce_seconds)
+    self.title_debounce_state = new_state
+    if not emit then return end
+  end
+  self.writer:write(ts, 'window_title', self:_window_fields(win))
 end
 
 function obj:_emit_system(name)
@@ -243,6 +268,8 @@ function obj:start()
 
   self.config = merge_config(self.defaults, load_local_overrides(self.spoonPath or '.'))
   if not self:_validate_config() then return self end
+
+  self.title_debounce_state = title_debounce_mod.initial_state()
 
   self.writer = writer_mod.new({
     log_dir = self.config.log_dir,
