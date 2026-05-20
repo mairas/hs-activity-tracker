@@ -54,6 +54,12 @@ All timestamps are **UTC**, ISO 8601 with `Z` suffix, millisecond precision. Raw
 
 `app_focus` and `window_focus`/`window_title` are independent observation streams; each event is self-contained (`window_focus`/`window_title` carry `app` and `bundle_id`) so analysis does not need to walk back to find context.
 
+### Title debounce
+
+Animated titles (CLI spinner glyphs, browser progress counters, save indicators) make `hs.window.filter`'s `windowTitleChanged` callback fire many times per second. To keep the event log readable, `window_title` is debounced per `window_id`: a change is emitted only if **no other observation** (emitted or suppressed) landed within `window_title_debounce_seconds` (default 2 s). Each observation extends the suppression, so a sustained sub-debounce stream stays silent indefinitely after its first frame; an isolated change followed by silence emits immediately. `window_focus` events seed the same observation timestamp so the post-focus animation burst is suppressed correctly. Setting `window_title_debounce_seconds = 0` disables suppression for users who want the raw stream.
+
+Tradeoff: when a noisy stream eventually settles, the final stable title is part of the burst and is therefore suppressed — its value is lost until the next genuine change. That's the cost of leading-edge debounce; capturing the settled title would require a trailing-edge timer-flush variant that we judged not worth the added complexity.
+
 ## Idle handling
 
 Polled by a single 15s timer.
