@@ -57,7 +57,7 @@ Then trigger each scenario and confirm the expected event appears:
 - [ ] **Wait 5 minutes with no activity.** Expect: exactly one `heartbeat` event, no spurious `idle_start`s.
 - [ ] **Lock the screen** (Ctrl-Cmd-Q). Expect: `system screen_locked`.
 - [ ] **Put the machine to sleep, then wake it.** Expect: `system will_sleep` then `system did_wake`.
-- [ ] **Open 1Password and view a vault.** Expect: `window_focus` with `title: null` (denylist scrub).
+- [ ] **Open a Private Browsing / Incognito window in any browser.** Expect: `window_focus` with `title: null` (denylist scrub).
 - [ ] **Quit Hammerspoon cleanly.** Expect: `tracker stopped` as the last line.
 
 ## Development

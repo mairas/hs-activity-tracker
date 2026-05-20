@@ -32,8 +32,6 @@ obj.defaults = {
   log_dir = '~/.local/share/hs-activity-tracker/events',
   diagnostic_log = '~/.local/share/hs-activity-tracker/tracker.log',
   title_denylist_bundle_ids = {
-    'com.agilebits.onepassword7',
-    'com.1password.1password',
     'com.apple.SecurityAgent',
   },
   title_denylist_patterns = {
