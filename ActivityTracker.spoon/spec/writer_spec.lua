@@ -99,6 +99,53 @@ describe('writer', function()
     assert.is_not_nil(new[2]:find('"app":"Y"', 1, true))
   end)
 
+  it('does not rotate when a past-dated event is written into an open file', function()
+    local replay_calls = 0
+    w = writer.new({
+      log_dir = tmp .. '/events',
+      diagnostic_log = tmp .. '/tracker.log',
+      on_rotation = function() replay_calls = replay_calls + 1 end,
+    })
+
+    -- Open today's file with a fresh event, then write a past-dated event
+    -- (mirrors state-replay emitting idle_start with ts = now - idle_time
+    -- when the user has been idle across midnight).
+    w:write(TS_2026_05_21, 'tracker', { { 'event', 'started' } })
+    w:write(TS_2026_05_20, 'idle_start', { { 'idle_started_at', TS_2026_05_20 } })
+
+    assert.are.equal(0, replay_calls)
+    -- Yesterday's file must not be (re-)opened by a backward "rotation".
+    assert.is_nil(read_file(tmp .. '/events/2026-05-20.jsonl'))
+
+    local today = lines(read_file(tmp .. '/events/2026-05-21.jsonl'))
+    assert.are.equal(2, #today)
+    assert.is_not_nil(today[1]:find('"event":"started"', 1, true))
+    assert.is_not_nil(today[2]:find('"type":"idle_start"', 1, true))
+  end)
+
+  it('does not recurse when on_rotation writes a past-dated event', function()
+    -- Reproduces the day_rotated spam: at midnight rollover the writer
+    -- rotates forward, on_rotation runs state replay, and state replay
+    -- emits an idle_start with a yesterday timestamp. That past-dated
+    -- write must not re-trigger on_rotation.
+    local replay_calls = 0
+    w = writer.new({
+      log_dir = tmp .. '/events',
+      diagnostic_log = tmp .. '/tracker.log',
+      on_rotation = function(writer_instance)
+        replay_calls = replay_calls + 1
+        writer_instance:write(TS_2026_05_20, 'idle_start',
+          { { 'idle_started_at', TS_2026_05_20 } })
+      end,
+    })
+
+    w:write(TS_2026_05_20, 'tracker', { { 'event', 'started' } })
+    w:write(TS_2026_05_21, 'app_focus',
+      { { 'app', 'X' }, { 'bundle_id', 'x' }, { 'pid', 1 } })
+
+    assert.are.equal(1, replay_calls)
+  end)
+
   it('invokes on_rotation between the new file marker and the triggering event', function()
     local replay_called = false
     w = writer.new({
