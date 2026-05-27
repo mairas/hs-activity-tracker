@@ -95,7 +95,9 @@ function Writer:write(ts, event_type, fields)
     return self:_write_raw(ts, event_type, fields)
   end
 
-  if desired_date ~= self.handle_date then
+  -- Forward-only: a backward "rotation" would re-enter on_rotation → state
+  -- replay → another past-dated write, recursing until the stack overflows.
+  if desired_date > self.handle_date then
     self:_write_raw(ts, 'tracker', DAY_ROTATED)
     self.handle:close()
     self.handle = nil
