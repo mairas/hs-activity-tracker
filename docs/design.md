@@ -1,7 +1,7 @@
 # hs-activity-tracker — Design
 
 **Status:** Approved 2026-05-20
-**Scope:** Capture only. Reporting/aggregation deferred.
+**Scope:** Capture first. A first small reporting tool now lives in-repo (see *Out of scope* and `docs/analysis.md`); the capture layer remains the focus.
 
 ## Purpose
 
@@ -179,7 +179,9 @@ These modules import nothing from `hs.*`. The Spoon's `init.lua` is the only fil
 
 ## Out of scope (v1)
 
-- Reporting, aggregation, or visualization
+- ~~Reporting, aggregation, or visualization~~ — partially revisited: `analysis/app_usage.py`
+  (per-app active-use periods) now lives in-repo, documented in `docs/analysis.md`.
+  Richer reporting/visualization remains out of scope for the capture layer.
 - Browser tab URL capture beyond what window titles already expose
 - Per-display tracking, mouse/keystroke counts, network/SSID, calendar correlation
 - Compression or retention pruning

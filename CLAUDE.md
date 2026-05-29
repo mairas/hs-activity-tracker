@@ -11,6 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 There is no lint step and no CI; correctness rests on busted plus manual scenarios from `docs/design.md`.
 
+- `python3 analysis/app_usage.py <App> --since YYYY-MM-DD` — per-app active-use periods from the event log. Stdlib only; methodology and data gotchas in `docs/analysis.md`.
+
 ## Architecture
 
 This is a Hammerspoon Spoon. The only file that touches `hs.*` APIs is `ActivityTracker.spoon/init.lua`. Everything under `ActivityTracker.spoon/lib/` is **pure Lua** and unit-tested by `busted` — that boundary is load-bearing, not stylistic. When adding behavior, push the testable logic (state machines, formatters, matchers, path math) into `lib/` and keep `init.lua` as the thin glue layer that wires watchers and timers to writer calls.
