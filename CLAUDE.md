@@ -11,7 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 There is no lint step and no CI; correctness rests on busted plus manual scenarios from `docs/design.md`.
 
-- `python3 analysis/app_usage.py <App> --since YYYY-MM-DD` — per-app active-use periods from the event log. Stdlib only; methodology and data gotchas in `docs/analysis.md`.
+- `python3 analysis/app_usage.py <App> --since YYYY-MM-DD` — per-app active-use periods from the event log. Add `--title-contains <substr>` to isolate one document (e.g. a KiCad project) by window title. Stdlib only; methodology and data gotchas in `docs/analysis.md`.
+- `python3 analysis/test_app_usage.py` — scenario checks for the `app_usage.py` interval logic (stdlib asserts, no pytest; not wired into the busted `./run test`).
 
 ## Architecture
 

@@ -22,6 +22,7 @@ Common flags:
 | `--since` / `--until` | all | UTC date bounds (`YYYY-MM-DD`), matched against the file name. |
 | `--break-mins` | `10` | A no-engagement gap at least this long ends a session. |
 | `--min-secs` | `30` | Drop sessions shorter than this (momentary focus blips). |
+| `--title-contains` | off | Only count time when the app's own window title contains this substring (case-insensitive). See below. |
 | `--utc-offset` | system local | Hours from UTC for display only. |
 | `--events-dir` | `~/.local/share/hs-activity-tracker/events` | Where the JSONL lives. |
 
@@ -58,6 +59,46 @@ app never lost focus while you were gone.
 moving the threshold between 3 and 10 minutes barely changed engaged totals (~9
 minutes across five days): real idle gaps were bimodal — either short pauses or
 genuine departures — with little in between.
+
+## Filtering by window title (`--title-contains`)
+
+`app` alone aggregates every window of an application together. `--title-contains`
+narrows the count to time when the app's window title held a given substring — the
+practical way to isolate one document among many in the same app. For KiCad, where
+the project name is in every editor title (`pulse — PCB Editor`, `esp32 [pulse/ESP32]
+— Schematic Editor`), `--title-contains pulse` reports just that project:
+
+```
+python3 analysis/app_usage.py KiCad --since 2026-05-30 --title-contains pulse
+```
+
+The match is a plain case-insensitive substring test, deliberately general: it
+knows nothing about KiCad's title grammar, so it works for any app whose titles
+carry a stable identifier. Being a substring, it over-counts if the identifier is
+not distinctive — `pulse` also matches a project named `pulse-charger`. Pick a
+substring unique to the document. An empty substring matches every titled window
+(it is still a filter, not the same as omitting the flag, which counts all
+frontmost time including before the first title event).
+
+Two properties make the number trustworthy:
+
+- **The title comes only from the target app's `window_title` events.** A background
+  window keeps emitting title events — an animated browser tab cycling
+  "...new messages..." fires several a minute while you are heads-down in KiCad.
+  Keying off any app's titles would let that noise end the match constantly and
+  undercount badly (it cut a real 5h17m to 1h31m on the first pass). The title is
+  carried forward from the target app's own events only.
+- **Idle and break handling are unchanged.** Title filtering happens before the
+  idle subtraction and sessioning of the normal pipeline; it only removes the
+  frontmost time whose title didn't match.
+
+Caveat — **transient titles end a match.** A modal dialog ("Footprint Properties",
+"Symbol Fields Table") or a denylisted (`null`) title does not contain the
+substring, so the seconds it is showing are not counted, and the match only resumes
+when a matching title fires again. This is a small undercount (~5%, a few minutes
+per day on the KiCad data) and the price of staying app-agnostic. Carrying a match
+across such gaps would require encoding each app's notion of "same document, different
+dialog" — the per-project bucketing under *Extending*.
 
 ## Pipeline
 
@@ -104,8 +145,11 @@ These tripped up the first analysis pass; respect them or the numbers lie.
 
 ## Extending
 
-The `app` argument matches `app_focus.app` exactly. To split by sub-tool or
-project (e.g. KiCad Schematic Editor vs PCB Editor, or per-board), join on the
-`window_focus` / `window_title` stream by `window_id` and bucket on the title —
-the titles distinguish editor type and document. Not implemented here; left as the
-obvious next step when per-project breakdowns are needed.
+The `app` argument matches `app_focus.app` exactly. `--title-contains` (above) is
+the lightweight way to isolate one document by a title substring. A fuller
+per-project breakdown — bucketing all of an app's time into named groups in one
+pass, and carrying a group across its own dialogs — would join the
+`window_focus` / `window_title` stream by `window_id` and parse each app's title
+grammar (e.g. KiCad's `name [Project/Sheet] — Editor`). Not implemented; the
+substring filter covers the common "how long on project X" question without that
+machinery.
