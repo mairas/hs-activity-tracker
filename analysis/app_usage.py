@@ -16,10 +16,12 @@ no engagement that lasts at least that long ends the current session, whether th
 gap is time in another app or time idle at the keyboard. Shorter gaps (reading a
 datasheet, thinking) stay inside the session.
 
-Pass --title-contains to further restrict engaged time to moments when the app's
-own window title matched a substring (e.g. one KiCad project among several). The
-title is taken only from the target app's window_title events, so another app's
-title changes (an animated browser tab in the background) never end a match.
+Pass --title-contains, --title-matches or --title-excludes to further restrict
+engaged time to moments when the frontmost app's own window title passed the
+filter (e.g. one KiCad project among several). Each app's title is taken only from
+its own window_title events, so another app's title changes (an animated browser
+tab in the background) never end a match. With a title filter the app argument may
+be omitted: every app counts, and each day gets a per-app breakdown.
 
 Stdlib only. Run with `python3 analysis/app_usage.py KiCad --since 2026-05-25`
 (or via `uv run`).
@@ -30,9 +32,12 @@ import datetime
 import glob
 import json
 import os
+import re
 import sys
 
 DEFAULT_EVENTS_DIR = "~/.local/share/hs-activity-tracker/events"
+# Per-app lines below this round to "0s" and only add noise.
+MIN_BREAKDOWN_SECS = 1
 
 
 def parse_ts(ts):
@@ -114,23 +119,38 @@ def subtract(s, e, cuts):
         yield (cur, e)
 
 
-def title_spans(events, app, needle):
-    """Spans during which `app`'s most recent window title contains `needle`
-    (case-insensitive).
+def title_predicate(contains=None, matches=None, excludes=None):
+    """Combine the title filters into one test on a title string, or None when
+    no filter is given. All given filters must hold; all are case-insensitive."""
+    if contains is None and matches is None and excludes is None:
+        return None
+    match_re = re.compile(matches, re.I) if matches is not None else None
+    exclude_re = re.compile(excludes, re.I) if excludes is not None else None
+
+    def pred(title):
+        if contains is not None and contains.lower() not in title.lower():
+            return False
+        if match_re is not None and not match_re.search(title):
+            return False
+        return not (exclude_re is not None and exclude_re.search(title))
+    return pred
+
+
+def title_spans(events, app, pred):
+    """Spans during which `app`'s most recent window title passes `pred`.
 
     The title is carried forward from the target app's own `window_title` events
     only. Other apps emit title events even while in the background (an animated
-    browser tab, say), so mixing them in would spuriously end a match. A null
-    (denylisted) or non-matching title ends the current span; the next matching
-    title reopens one.
+    browser tab, say), so mixing them in would spuriously end a match. A
+    non-matching title ends the current span, and so does a null (denylisted)
+    one, which is tested as the empty string; the next matching title reopens one.
     """
-    needle = needle.lower()
     out = []
     start = None
     for e in events:
         if e["type"] != "window_title" or e.get("app") != app:
             continue
-        if needle in (e.get("title") or "").lower():
+        if pred(e.get("title") or ""):
             if start is None:
                 start = e["_t"]
         elif start is not None:
@@ -149,21 +169,32 @@ def clip(s, e, spans):
             yield (lo, hi)
 
 
-def engaged_intervals(events, app, threshold, title_contains=None):
-    """Intervals where `app` is frontmost and the user is not (long-)idle.
+def engaged_pieces(events, app, threshold, title_pred=None):
+    """[(start, end, app)] where an app is frontmost and the user is not
+    (long-)idle. `app=None` counts every app.
 
-    With `title_contains`, additionally restrict to moments when the app's own
-    window title matched that substring (see title_spans)."""
+    With `title_pred`, additionally restrict to moments when the frontmost app's
+    own window title passed it (see title_spans)."""
     away = away_intervals(events, threshold)
-    keep = title_spans(events, app, title_contains) if title_contains is not None else None
+    keep = {}
     out = []
     for s, e, fg_app in frontmost_intervals(events):
-        if fg_app != app or e <= s:
+        if (app is not None and fg_app != app) or e <= s:
             continue
-        segments = clip(s, e, keep) if keep is not None else [(s, e)]
+        if title_pred is None:
+            segments = [(s, e)]
+        else:
+            if fg_app not in keep:
+                keep[fg_app] = title_spans(events, fg_app, title_pred)
+            segments = clip(s, e, keep[fg_app])
         for a, b in segments:
-            out.extend(subtract(a, b, away))
-    return sorted((s, e) for s, e in out if e > s)
+            out.extend((x, y, fg_app) for x, y in subtract(a, b, away))
+    return sorted(p for p in out if p[1] > p[0])
+
+
+def engaged_intervals(events, app, threshold, title_pred=None):
+    """engaged_pieces without the app name."""
+    return [(s, e) for s, e, _ in engaged_pieces(events, app, threshold, title_pred)]
 
 
 def sessions(engaged, threshold, min_secs):
@@ -180,6 +211,15 @@ def sessions(engaged, threshold, min_secs):
         else:
             out.append([s, e, e - s])
     return [p for p in out if p[1] - p[0] >= min_secs]
+
+
+def app_breakdown(pieces, periods):
+    """[(app, engaged_seconds)] for the pieces inside `periods`, largest first."""
+    totals = {}
+    for s, e, app in pieces:
+        if any(ps <= s < pe for ps, pe, _ in periods):
+            totals[app] = totals.get(app, 0) + e - s
+    return sorted(totals.items(), key=lambda kv: -kv[1])
 
 
 def make_tz(utc_offset):
@@ -205,7 +245,9 @@ def local_date(t, tz):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("app", help="Application name as it appears in app_focus 'app' field (e.g. KiCad)")
+    ap.add_argument("app", nargs="?",
+                    help="Application name as it appears in app_focus 'app' field (e.g. KiCad). "
+                         "Omit to count every app; a title filter is then required")
     ap.add_argument("--since", help="First UTC date to include, YYYY-MM-DD")
     ap.add_argument("--until", help="Last UTC date to include, YYYY-MM-DD")
     ap.add_argument("--break-mins", type=float, default=10.0,
@@ -215,11 +257,21 @@ def main(argv=None):
     ap.add_argument("--title-contains",
                     help="Only count time when the app's own window title contains this "
                          "substring, case-insensitive (e.g. a KiCad project name)")
+    ap.add_argument("--title-matches", metavar="REGEX",
+                    help="Only count time when the window title matches this regex, case-insensitive")
+    ap.add_argument("--title-excludes", metavar="REGEX",
+                    help="Do not count time when the window title matches this regex, case-insensitive")
     ap.add_argument("--utc-offset", type=float, default=None,
                     help="Hours to offset from UTC for display (default: system local time)")
     ap.add_argument("--events-dir", default=DEFAULT_EVENTS_DIR,
                     help=f"Event log directory (default {DEFAULT_EVENTS_DIR})")
     args = ap.parse_args(argv)
+    try:
+        title_pred = title_predicate(args.title_contains, args.title_matches, args.title_excludes)
+    except re.error as err:
+        ap.error(f"invalid regex: {err}")
+    if args.app is None and title_pred is None:
+        ap.error("give an app, a title filter, or both")
 
     threshold = args.break_mins * 60
     tz = make_tz(args.utc_offset)
@@ -229,10 +281,11 @@ def main(argv=None):
         print("No events found for the given range.", file=sys.stderr)
         return 1
 
-    engaged = engaged_intervals(events, args.app, threshold, args.title_contains)
-    periods = sessions(engaged, threshold, args.min_secs)
+    pieces = engaged_pieces(events, args.app, threshold, title_pred)
+    periods = sessions([(s, e) for s, e, _ in pieces], threshold, args.min_secs)
+    subject = args.app or "matching"
     if not periods:
-        print(f"No {args.app} activity found for the given range.", file=sys.stderr)
+        print(f"No {subject} activity found for the given range.", file=sys.stderr)
         return 1
 
     by_day = {}
@@ -240,8 +293,11 @@ def main(argv=None):
         by_day.setdefault(local_date(s, tz), []).append((s, e, eng))
 
     tzlabel = "system local" if tz is None else f"UTC{args.utc_offset:+g}"
-    title_note = f"  |  title contains {args.title_contains!r}" if args.title_contains is not None else ""
-    print(f"Active {args.app} sessions{title_note}  |  break >= {args.break_mins:g} min  |  times in {tzlabel}\n")
+    notes = [f"title {label} {value!r}" for label, value in (
+        ("contains", args.title_contains), ("matches", args.title_matches),
+        ("excludes", args.title_excludes)) if value is not None]
+    title_note = "".join(f"  |  {n}" for n in notes)
+    print(f"Active {subject} sessions{title_note}  |  break >= {args.break_mins:g} min  |  times in {tzlabel}\n")
 
     grand_span = grand_eng = 0.0
     for day in sorted(by_day):
@@ -252,6 +308,10 @@ def main(argv=None):
         grand_eng += deng
         pct = round(100 * deng / dspan) if dspan else 0
         print(f"{day}   span {fmt_dur(dspan)} | engaged {fmt_dur(deng)} ({pct}%) | {len(rows)} session(s)")
+        if args.app is None:
+            print("   by app: " + ", ".join(
+                f"{name} {fmt_dur(secs)}" for name, secs in app_breakdown(pieces, rows)
+                if secs >= MIN_BREAKDOWN_SECS))
         for s, e, eng in rows:
             sp = e - s
             ppct = round(100 * eng / sp) if sp else 0
