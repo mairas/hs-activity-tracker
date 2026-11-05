@@ -17,10 +17,12 @@ au = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(au)
 
 
-def ev(clock, typ, app=None, title="__none__"):
+def ev(clock, typ, app=None, title="__none__", window_id=None):
     e = {"ts": f"2026-06-01T{clock}.000Z", "type": typ}
     if app is not None:
         e["app"] = app
+    if window_id is not None:
+        e["window_id"] = window_id
     if title != "__none__":
         e["title"] = title  # may be None (denylisted)
     e["_t"] = au.parse_ts(e["ts"])
@@ -184,6 +186,42 @@ def test_pieces_carry_app_for_breakdown():
 
 def test_app_and_regex_combine():
     assert engaged_secs(cross_app_events(), "Ghostty", BREAK, matches="velamari|pulse") == 360
+
+
+def test_title_from_window_focus_counts():
+    # Switching to an existing window: its title arrives only in window_focus.
+    events = [
+        ev("10:00:00", "app_focus", "Ghostty"),
+        ev("10:00:00", "window_focus", "Ghostty", "~/other", window_id=1),
+        ev("10:02:00", "window_focus", "Ghostty", "[velamari] RFQ", window_id=2),
+        ev("10:07:00", "app_focus", "Browser"),
+    ]
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 300
+
+
+def test_unfocused_window_title_does_not_change_match():
+    # A background Brave window's title updates must not end or start a match.
+    events = [
+        ev("10:00:00", "app_focus", "Brave"),
+        ev("10:00:00", "window_focus", "Brave", "Issue 60 · velamari", window_id=1),
+        ev("10:01:00", "window_title", "Brave", "alibaba new messages", window_id=2),
+        ev("10:03:00", "window_focus", "Brave", "Shopify orders", window_id=3),
+        ev("10:04:00", "window_title", "Brave", "velamari PR 61", window_id=1),
+        ev("10:06:00", "app_focus", "Ghostty"),
+    ]
+    # Matches 10:00-10:03 only: window 2's spam does not end it, and window 1's
+    # update at 10:04 does not reopen it while window 3 is focused.
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 180
+
+
+def test_title_update_of_focused_window_ends_match():
+    events = [
+        ev("10:00:00", "app_focus", "Brave"),
+        ev("10:00:00", "window_focus", "Brave", "velamari issues", window_id=1),
+        ev("10:02:00", "window_title", "Brave", "Inbox", window_id=1),
+        ev("10:05:00", "app_focus", "Ghostty"),
+    ]
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 120
 
 
 def test_no_filters_gives_no_predicate():

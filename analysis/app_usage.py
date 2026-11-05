@@ -137,20 +137,34 @@ def title_predicate(contains=None, matches=None, excludes=None):
 
 
 def title_spans(events, app, pred):
-    """Spans during which `app`'s most recent window title passes `pred`.
+    """Spans during which the title of `app`'s focused window passes `pred`.
 
-    The title is carried forward from the target app's own `window_title` events
-    only. Other apps emit title events even while in the background (an animated
-    browser tab, say), so mixing them in would spuriously end a match. A
-    non-matching title ends the current span, and so does a null (denylisted)
+    Titles are kept per window_id from the app's own `window_focus` and
+    `window_title` events, and `window_focus` names the focused window. Both
+    halves matter: switching to an existing window can carry its title only in
+    `window_focus`, and an app emits `window_title` for its unfocused windows too
+    (a background browser tab whose title animates). Other apps' events are
+    ignored for the same reason. Until the app's first `window_focus`, a
+    `window_title` event is taken as coming from the focused window.
+
+    A non-matching title ends the current span, and so does a null (denylisted)
     one, which is tested as the empty string; the next matching title reopens one.
     """
     out = []
     start = None
+    titles = {}
+    focused = None
+    seen_focus = False
     for e in events:
-        if e["type"] != "window_title" or e.get("app") != app:
+        if e["type"] not in ("window_focus", "window_title") or e.get("app") != app:
             continue
-        if pred(e.get("title") or ""):
+        wid = e.get("window_id")
+        titles[wid] = e.get("title") or ""
+        if e["type"] == "window_focus":
+            focused, seen_focus = wid, True
+        elif not seen_focus:
+            focused = wid
+        if pred(titles[focused]):
             if start is None:
                 start = e["_t"]
         elif start is not None:
