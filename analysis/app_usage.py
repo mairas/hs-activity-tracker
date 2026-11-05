@@ -16,6 +16,11 @@ no engagement that lasts at least that long ends the current session, whether th
 gap is time in another app or time idle at the keyboard. Shorter gaps (reading a
 datasheet, thinking) stay inside the session.
 
+Pass --title-contains to further restrict engaged time to moments when the app's
+own window title matched a substring (e.g. one KiCad project among several). The
+title is taken only from the target app's window_title events, so another app's
+title changes (an animated browser tab in the background) never end a match.
+
 Stdlib only. Run with `python3 analysis/app_usage.py KiCad --since 2026-05-25`
 (or via `uv run`).
 """
@@ -109,14 +114,55 @@ def subtract(s, e, cuts):
         yield (cur, e)
 
 
-def engaged_intervals(events, app, threshold):
-    """Intervals where `app` is frontmost and the user is not (long-)idle."""
+def title_spans(events, app, needle):
+    """Spans during which `app`'s most recent window title contains `needle`
+    (case-insensitive).
+
+    The title is carried forward from the target app's own `window_title` events
+    only. Other apps emit title events even while in the background (an animated
+    browser tab, say), so mixing them in would spuriously end a match. A null
+    (denylisted) or non-matching title ends the current span; the next matching
+    title reopens one.
+    """
+    needle = needle.lower()
+    out = []
+    start = None
+    for e in events:
+        if e["type"] != "window_title" or e.get("app") != app:
+            continue
+        if needle in (e.get("title") or "").lower():
+            if start is None:
+                start = e["_t"]
+        elif start is not None:
+            out.append((start, e["_t"]))
+            start = None
+    if start is not None:
+        out.append((start, events[-1]["_t"]))
+    return out
+
+
+def clip(s, e, spans):
+    """Yield the parts of [s, e) that fall within any interval in `spans`."""
+    for a, b in spans:
+        lo, hi = max(s, a), min(e, b)
+        if hi > lo:
+            yield (lo, hi)
+
+
+def engaged_intervals(events, app, threshold, title_contains=None):
+    """Intervals where `app` is frontmost and the user is not (long-)idle.
+
+    With `title_contains`, additionally restrict to moments when the app's own
+    window title matched that substring (see title_spans)."""
     away = away_intervals(events, threshold)
+    keep = title_spans(events, app, title_contains) if title_contains is not None else None
     out = []
     for s, e, fg_app in frontmost_intervals(events):
         if fg_app != app or e <= s:
             continue
-        out.extend(subtract(s, e, away))
+        segments = clip(s, e, keep) if keep is not None else [(s, e)]
+        for a, b in segments:
+            out.extend(subtract(a, b, away))
     return sorted((s, e) for s, e in out if e > s)
 
 
@@ -166,6 +212,9 @@ def main(argv=None):
                     help="A no-engagement gap >= this many minutes ends a session (default 10)")
     ap.add_argument("--min-secs", type=float, default=30.0,
                     help="Drop sessions shorter than this many seconds (default 30)")
+    ap.add_argument("--title-contains",
+                    help="Only count time when the app's own window title contains this "
+                         "substring, case-insensitive (e.g. a KiCad project name)")
     ap.add_argument("--utc-offset", type=float, default=None,
                     help="Hours to offset from UTC for display (default: system local time)")
     ap.add_argument("--events-dir", default=DEFAULT_EVENTS_DIR,
@@ -180,7 +229,7 @@ def main(argv=None):
         print("No events found for the given range.", file=sys.stderr)
         return 1
 
-    engaged = engaged_intervals(events, args.app, threshold)
+    engaged = engaged_intervals(events, args.app, threshold, args.title_contains)
     periods = sessions(engaged, threshold, args.min_secs)
     if not periods:
         print(f"No {args.app} activity found for the given range.", file=sys.stderr)
@@ -191,7 +240,8 @@ def main(argv=None):
         by_day.setdefault(local_date(s, tz), []).append((s, e, eng))
 
     tzlabel = "system local" if tz is None else f"UTC{args.utc_offset:+g}"
-    print(f"Active {args.app} sessions  |  break >= {args.break_mins:g} min  |  times in {tzlabel}\n")
+    title_note = f"  |  title contains {args.title_contains!r}" if args.title_contains is not None else ""
+    print(f"Active {args.app} sessions{title_note}  |  break >= {args.break_mins:g} min  |  times in {tzlabel}\n")
 
     grand_span = grand_eng = 0.0
     for day in sorted(by_day):
