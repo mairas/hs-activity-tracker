@@ -12,17 +12,20 @@ behind the metrics. The reference implementation is `analysis/app_usage.py`.
 
 ```
 python3 analysis/app_usage.py KiCad --since 2026-05-25
+python3 analysis/app_usage.py --since 2026-10-29 --title-matches 'velamari|pulse' --title-excludes halmet
 ```
 
 Common flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `app` (positional) | — | Value of the `app` field in `app_focus` events (e.g. `KiCad`, `Ghostty`). |
+| `app` (positional) | all apps | Value of the `app` field in `app_focus` events (e.g. `KiCad`, `Ghostty`). May be omitted when a title filter is given. |
 | `--since` / `--until` | all | UTC date bounds (`YYYY-MM-DD`), matched against the file name. |
 | `--break-mins` | `10` | A no-engagement gap at least this long ends a session. |
 | `--min-secs` | `30` | Drop sessions shorter than this (momentary focus blips). |
-| `--title-contains` | off | Only count time when the app's own window title contains this substring (case-insensitive). See below. |
+| `--title-contains` | off | Only count time when the focused window's title contains this substring (case-insensitive). See below. |
+| `--title-matches` | off | Only count time when the focused window's title matches this regex (case-insensitive). |
+| `--title-excludes` | off | Do not count time when the focused window's title matches this regex (case-insensitive). |
 | `--utc-offset` | system local | Hours from UTC for display only. |
 | `--events-dir` | `~/.local/share/hs-activity-tracker/events` | Where the JSONL lives. |
 
@@ -60,7 +63,7 @@ moving the threshold between 3 and 10 minutes barely changed engaged totals (~9
 minutes across five days): real idle gaps were bimodal — either short pauses or
 genuine departures — with little in between.
 
-## Filtering by window title (`--title-contains`)
+## Filtering by window title
 
 `app` alone aggregates every window of an application together. `--title-contains`
 narrows the count to time when the app's window title held a given substring — the
@@ -80,14 +83,39 @@ substring unique to the document. An empty substring matches every titled window
 (it is still a filter, not the same as omitting the flag, which counts all
 frontmost time including before the first title event).
 
-Two properties make the number trustworthy:
+`--title-matches` and `--title-excludes` take case-insensitive regexes. All given
+title filters must hold. The exclusion handles identifier collisions: a query for
+the `pulse` project also matched a HALMET terminal session titled "Pulse sensor LP
+filter tuning", and `--title-excludes halmet` removes it.
 
-- **The title comes only from the target app's `window_title` events.** A background
-  window keeps emitting title events — an animated browser tab cycling
-  "...new messages..." fires several a minute while you are heads-down in KiCad.
-  Keying off any app's titles would let that noise end the match constantly and
-  undercount badly (it cut a real 5h17m to 1h31m on the first pass). The title is
-  carried forward from the target app's own events only.
+### Across apps
+
+Omit `app` and give a title filter to count every app whose focused window matches.
+This answers "how long on project X" when the project shows up in a terminal tab, a
+browser tab (an issue, a mail thread, a call) and an editor. Each day is followed by
+a `by app:` line splitting its engaged time per app. Omitting both `app` and every
+title filter is a usage error.
+
+### Which title counts
+
+Three properties make the number trustworthy:
+
+- **The title is the frontmost app's focused window's title.** Titles are kept per
+  `window_id` from the app's `window_focus` and `window_title` events, and
+  `window_focus` names the focused window. Both halves matter. Switching to an
+  existing window can carry its title only in `window_focus`, with no
+  `window_title` after it. And an app emits `window_title` for its *unfocused*
+  windows too: a background Brave window with an animated "...new messages..."
+  tab fires one every 10–30 seconds while another Brave window is in front.
+  Reading only `window_title` events undercounted a 2026-10-29→11-05 cross-app
+  query by 4–14 minutes per day, and missed one day's 11 minutes entirely.
+  Until an app's first `window_focus`, its `window_title` events are taken as the
+  focused window's; every daily file replays `window_focus` at the top, so this
+  only matters for synthetic streams.
+- **Other apps' title events never end a match.** A background app keeps emitting
+  title events while you are heads-down in KiCad. Keying off any app's titles would
+  let that noise end the match constantly and undercount badly (it cut a real 5h17m
+  to 1h31m on the first pass).
 - **Idle and break handling are unchanged.** Title filtering happens before the
   idle subtraction and sessioning of the normal pipeline; it only removes the
   frontmost time whose title didn't match.
@@ -145,11 +173,9 @@ These tripped up the first analysis pass; respect them or the numbers lie.
 
 ## Extending
 
-The `app` argument matches `app_focus.app` exactly. `--title-contains` (above) is
-the lightweight way to isolate one document by a title substring. A fuller
-per-project breakdown — bucketing all of an app's time into named groups in one
-pass, and carrying a group across its own dialogs — would join the
-`window_focus` / `window_title` stream by `window_id` and parse each app's title
-grammar (e.g. KiCad's `name [Project/Sheet] — Editor`). Not implemented; the
-substring filter covers the common "how long on project X" question without that
-machinery.
+The `app` argument matches `app_focus.app` exactly. The title filters (above) are
+the lightweight way to isolate one document or project. A fuller per-project
+breakdown — bucketing all time into named groups in one pass, and carrying a group
+across its own dialogs — would parse each app's title grammar (e.g. KiCad's
+`name [Project/Sheet] — Editor`). Not implemented; the regex filters cover the
+common "how long on project X" question without that machinery.
