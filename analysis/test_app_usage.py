@@ -6,7 +6,9 @@ streams and asserts engaged-time math, the --title-contains filter, and the
 load-bearing invariant that the default (no-filter) path is unchanged.
 """
 
+import contextlib
 import importlib.util
+import io
 import os
 
 _spec = importlib.util.spec_from_file_location(
@@ -15,10 +17,12 @@ au = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(au)
 
 
-def ev(clock, typ, app=None, title="__none__"):
+def ev(clock, typ, app=None, title="__none__", window_id=None):
     e = {"ts": f"2026-06-01T{clock}.000Z", "type": typ}
     if app is not None:
         e["app"] = app
+    if window_id is not None:
+        e["window_id"] = window_id
     if title != "__none__":
         e["title"] = title  # may be None (denylisted)
     e["_t"] = au.parse_ts(e["ts"])
@@ -29,8 +33,9 @@ def total(intervals):
     return sum(e - s for s, e in intervals)
 
 
-def engaged_secs(events, app, break_secs, title=None):
-    return total(au.engaged_intervals(events, app, break_secs, title))
+def engaged_secs(events, app, break_secs, title=None, matches=None, excludes=None):
+    pred = au.title_predicate(contains=title, matches=matches, excludes=excludes)
+    return total(au.engaged_intervals(events, app, break_secs, pred))
 
 
 BREAK = 600  # 10 min
@@ -125,13 +130,112 @@ def test_empty_needle_applies_filter_not_silent_passthrough():
 
 
 def test_title_spans_on_empty_events():
-    assert au.title_spans([], "KiCad", "projA") == []
+    assert au.title_spans([], "KiCad", au.title_predicate(contains="projA")) == []
 
 
 def test_clip_partial_overlap():
     # interval [10, 50] clipped to spans [0,20] and [40,100] -> [10,20]+[40,50]
     got = sorted(au.clip(10, 50, [(0, 20), (40, 100)]))
     assert got == [(10, 20), (40, 50)], got
+
+
+def cross_app_events():
+    # KiCad on proj, then a terminal tab on proj, then a browser on something else
+    # while the terminal's matching title is still its latest one.
+    return [
+        ev("10:00:00", "app_focus", "KiCad"),
+        ev("10:00:00", "window_title", "KiCad", "pulse — PCB Editor"),
+        ev("10:05:00", "app_focus", "Ghostty"),
+        ev("10:05:00", "window_title", "Ghostty", "[velamari-logger-hardware] RFQ"),
+        ev("10:08:00", "app_focus", "Browser"),
+        ev("10:08:00", "window_title", "Browser", "Inbox"),
+        ev("10:12:00", "app_focus", "Ghostty"),
+        ev("10:12:00", "window_title", "Ghostty", "[HALMET] Pulse sensor tuning"),
+        ev("10:15:00", "app_focus", "Browser"),
+    ]
+
+
+def test_regex_across_apps_sums_matching_frontmost_time():
+    # KiCad 10:00-10:05 + Ghostty 10:05-10:08 + Ghostty 10:12-10:15 (HALMET pulse)
+    assert engaged_secs(cross_app_events(), None, BREAK, matches="velamari|pulse") == 660
+
+
+def test_excludes_removes_a_match():
+    assert engaged_secs(cross_app_events(), None, BREAK,
+                        matches="velamari|pulse", excludes="halmet") == 480
+
+
+def test_background_matching_title_does_not_count():
+    # Ghostty's matching title stays its latest while the browser is frontmost
+    # 10:08-10:12; that time must not count.
+    events = cross_app_events()
+    t0 = events[0]["_t"]
+    pieces = au.engaged_pieces(events, None, BREAK, au.title_predicate(matches="velamari"))
+    assert [(a - t0, b - t0, app) for a, b, app in pieces] == [
+        (300, 480, "Ghostty")], pieces
+
+
+def test_pieces_carry_app_for_breakdown():
+    pieces = au.engaged_pieces(cross_app_events(), None, BREAK,
+                               au.title_predicate(matches="pulse|velamari", excludes="halmet"))
+    by_app = {}
+    for a, b, app in pieces:
+        by_app[app] = by_app.get(app, 0) + b - a
+    assert by_app == {"KiCad": 300, "Ghostty": 180}, by_app
+
+
+def test_app_and_regex_combine():
+    assert engaged_secs(cross_app_events(), "Ghostty", BREAK, matches="velamari|pulse") == 360
+
+
+def test_title_from_window_focus_counts():
+    # Switching to an existing window: its title arrives only in window_focus.
+    events = [
+        ev("10:00:00", "app_focus", "Ghostty"),
+        ev("10:00:00", "window_focus", "Ghostty", "~/other", window_id=1),
+        ev("10:02:00", "window_focus", "Ghostty", "[velamari] RFQ", window_id=2),
+        ev("10:07:00", "app_focus", "Browser"),
+    ]
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 300
+
+
+def test_unfocused_window_title_does_not_change_match():
+    # A background Brave window's title updates must not end or start a match.
+    events = [
+        ev("10:00:00", "app_focus", "Brave"),
+        ev("10:00:00", "window_focus", "Brave", "Issue 60 · velamari", window_id=1),
+        ev("10:01:00", "window_title", "Brave", "alibaba new messages", window_id=2),
+        ev("10:03:00", "window_focus", "Brave", "Shopify orders", window_id=3),
+        ev("10:04:00", "window_title", "Brave", "velamari PR 61", window_id=1),
+        ev("10:06:00", "app_focus", "Ghostty"),
+    ]
+    # Matches 10:00-10:03 only: window 2's spam does not end it, and window 1's
+    # update at 10:04 does not reopen it while window 3 is focused.
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 180
+
+
+def test_title_update_of_focused_window_ends_match():
+    events = [
+        ev("10:00:00", "app_focus", "Brave"),
+        ev("10:00:00", "window_focus", "Brave", "velamari issues", window_id=1),
+        ev("10:02:00", "window_title", "Brave", "Inbox", window_id=1),
+        ev("10:05:00", "app_focus", "Ghostty"),
+    ]
+    assert engaged_secs(events, None, BREAK, matches="velamari") == 120
+
+
+def test_no_filters_gives_no_predicate():
+    assert au.title_predicate() is None
+
+
+def test_no_app_and_no_title_filter_is_usage_error():
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            au.main(["--since", "2026-06-01", "--events-dir", "/nonexistent"])
+    except SystemExit as e:
+        assert e.code == 2, e.code
+    else:
+        raise AssertionError("expected a usage error")
 
 
 def main():
